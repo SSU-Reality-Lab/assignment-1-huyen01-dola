@@ -4,71 +4,91 @@ import numpy as np
 import os
 
 def gaussian_blur_kernel_2d(sigma, height, width):
-    '''주어진 sigma와 (height x width) 차원에 해당하는 가우시안 블러 커널을
-    반환합니다. width와 height는 서로 다를 수 있습니다.
-
-    입력(Input):
-        sigma:  가우시안 블러의 반경(정도)을 제어하는 파라미터.
-                본 과제에서는 높이와 너비 방향으로 대칭인 원형 가우시안(등방성)을 가정합니다.
-        width:  커널의 너비.
-        height: 커널의 높이.
-
-    출력(Output):
-        (height x width) 크기의 커널을 반환합니다. 이 커널로 이미지를 컨볼브하면
-        가우시안 블러가 적용된 결과가 나옵니다.
     '''
+    2D Gaussian kernel 생성 (height x width 크기).
+    sigma에 따라 퍼짐 정도 결정.
+    '''
+    # 중심 좌표 계산
+    y_mid = height // 2
+    x_mid = width // 2
+
+    kernel = np.zeros((height, width), dtype=np.float32)
+
+    for y in range(height):
+        for x in range(width):
+            dy = y - y_mid
+            dx = x - x_mid
+            kernel[y, x] = np.exp(-(dx**2 + dy**2) / (2 * sigma**2))
+
+    # Normalize (합이 1이 되도록)
+    kernel /= np.sum(kernel)
+    return kernel
+
 
 def cross_correlation_2d(img, kernel):
-    '''주어진 커널(크기 m x n )을 사용하여 입력 이미지와의
-    2D 상관(cross-correlation)을 계산합니다. 출력은 입력 이미지와 동일한 크기를
-    가져야 하며, 이미지 경계 밖의 픽셀은 0이라고 가정합니다. 입력이 RGB 이미지인
-    경우, 각 채널에 대해 커널을 별도로 적용해야 합니다.
+    '''
+    2D cross-correlation 수행.
+    - Grayscale: height x width
+    - Color: height x width x 3
+    Kernel은 홀수 사이즈.
+    '''
+    if img.ndim == 2:  # Grayscale
+        return _cross_correlation_gray(img, kernel)
+    elif img.ndim == 3:  # Color 이미지 => 채널별로 따로 적용
+        channels = []
+        for c in range(img.shape[2]):
+            channels.append(_cross_correlation_gray(img[:, :, c], kernel))
+        return np.stack(channels, axis=2)
+    else:
+        raise ValueError("지원되지 않는 이미지 형태")
 
-    입력(Inputs):
-        img:    NumPy 배열 형태의 RGB 이미지(height x width x 3) 또는
-                그레이스케일 이미지(height x width).
-        kernel: 2차원 NumPy 배열(m x n). m과 n은 모두 홀수(서로 같을 필요는 없음).
-    '''
-    
-    '''출력(Output):
-        입력 이미지와 동일한 크기(같은 너비, 높이, 채널 수)의 이미지를 반환합니다.
-    '''
+
+def _cross_correlation_gray(img, kernel):
+    h, w = img.shape
+    kh, kw = kernel.shape
+    pad_h = kh // 2
+    pad_w = kw // 2
+
+    # Padding (제로 패딩)
+    padded = np.pad(img, ((pad_h, pad_h), (pad_w, pad_w)), mode='constant', constant_values=0)
+    out = np.zeros_like(img, dtype=np.float32)
+
+    # Correlation = element-wise 곱 후 합
+    for i in range(h):
+        for j in range(w):
+            region = padded[i:i+kh, j:j+kw]
+            out[i, j] = np.sum(region * kernel)
+
+    return out
+
 
 def convolve_2d(img, kernel):
-    '''cross_correlation_2d()를 사용하여 2D 컨볼루션을 수행합니다.
-
-    입력(Inputs):
-        img:    NumPy 배열 형태의 RGB 이미지(height x width x 3) 또는
-                그레이스케일 이미지(height x width).
-        kernel: 2차원 NumPy 배열(m x n). m과 n은 모두 홀수(서로 같을 필요는 없음).
-
-    출력(Output):
-        입력 이미지와 동일한 크기(같은 너비, 높이, 채널 수)의 이미지를 반환합니다.
     '''
+    Convolution = cross-correlation with flipped kernel
+    '''
+    flipped_kernel = np.flipud(np.fliplr(kernel))
+    return cross_correlation_2d(img, flipped_kernel)
 
 
 def low_pass(img, sigma, size):
-    '''주어진 sigma와 정사각형 커널 크기(size)를 사용해 저역통과(low-pass)
-    필터가 적용된 것처럼 이미지를 필터링합니다. 저역통과 필터는 이미지의
-    고주파(세밀한 디테일) 성분을 억제합니다.
-
-    출력(Output):
-        입력 이미지와 동일한 크기(같은 너비, 높이, 채널 수)의 이미지를 반환합니다.
     '''
+    Gaussian low-pass filter.
+    '''
+    kernel = gaussian_blur_kernel_2d(sigma, size, size)
+    return cross_correlation_2d(img, kernel)
+
 
 def high_pass(img, sigma, size):
-    '''주어진 sigma와 정사각형 커널 크기(size)를 사용해 고역통과(high-pass)
-    필터가 적용된 것처럼 이미지를 필터링합니다. 고역통과 필터는 이미지의
-    저주파(거친 형태) 성분을 억제합니다.
-
-    출력(Output):
-        입력 이미지와 동일한 크기(같은 너비, 높이, 채널 수)의 이미지를 반환합니다.
     '''
+    High-pass filter = 원본 - Low-pass(blurred).
+    '''
+    low_img = low_pass(img, sigma, size)
+    return img - low_img
+
 
 def create_hybrid_image(img1, img2, sigma1, size1, high_low1, sigma2, size2,
         high_low2, mixin_ratio, scale_factor):
-    '''This function adds two images to create a hybrid image, based on
-    parameters specified by the user.'''
+    '''주어진 파라미터로 두 이미지를 합쳐 Hybrid Image 생성'''
     high_low1 = high_low1.lower()
     high_low2 = high_low2.lower()
 
@@ -86,7 +106,8 @@ def create_hybrid_image(img1, img2, sigma1, size1, high_low1, sigma2, size2,
     else:
         img2 = high_pass(img2, sigma2, size2)
 
-    img1 *=  (1 - mixin_ratio)
+    # 두 이미지 합치기
+    img1 *= (1 - mixin_ratio)
     img2 *= mixin_ratio
     hybrid_img = (img1 + img2) * scale_factor
     return (hybrid_img * 255).clip(0, 255).astype(np.uint8)
